@@ -2,7 +2,6 @@ import type * as Party from "partykit/server";
 import {
 	buildDeck,
 	defaultRoleConfig,
-	isEveryoneReady,
 	rolesCatalog,
 	shuffle,
 	totalRoles,
@@ -40,20 +39,8 @@ export default class Server implements Party.Server {
 		this.connections.delete(conn);
 		const clientId = this.connectionIdToClientId.get(conn.id);
 		if (clientId) {
+			// keep player data to preserve id/name across reconnects
 			this.connectionIdToClientId.delete(conn.id);
-			// remove player on disconnect
-			if (this.state.players[clientId]) {
-				delete this.state.players[clientId];
-				// transfer host if needed
-				if (this.state.hostId === clientId) {
-					this.state.hostId = this.findNextHostId();
-					if (this.state.hostId && this.state.players[this.state.hostId]) {
-						this.state.players[this.state.hostId].isHost = true;
-					}
-				}
-				// if we're in lobby and players changed, we may become invalid; that's fine for v1
-				this.broadcastState();
-			}
 		}
 	}
 
@@ -78,15 +65,12 @@ export default class Server implements Party.Server {
 				const now = Date.now();
 				const existing = this.state.players[msg.clientId];
 				if (existing) {
-					// update name if provided
-					if (typeof msg.name === "string") existing.name = msg.name;
-					// keep host/ready/joinedAt/role
+					// preserve existing player record (server-owned name)
 				} else {
 					const isFirst = Object.keys(this.state.players).length === 0;
 					this.state.players[msg.clientId] = {
 						id: msg.clientId,
-						name: typeof msg.name === "string" ? msg.name : "",
-						ready: false,
+						name: generateOldTimeyName(),
 						isHost: isFirst,
 						joinedAt: now,
 					};
@@ -95,20 +79,7 @@ export default class Server implements Party.Server {
 				this.broadcastState();
 				break;
 			}
-			case "setName": {
-				const player = this.getSenderPlayer(sender);
-				if (!player) return;
-				player.name = msg.name ?? "";
-				this.broadcastState();
-				break;
-			}
-			case "setReady": {
-				const player = this.getSenderPlayer(sender);
-				if (!player) return;
-				player.ready = !!msg.ready;
-				this.broadcastState();
-				break;
-			}
+			// name and ready are no longer editable by clients in v1.1
 			case "setRoleCount": {
 				const player = this.getSenderPlayer(sender);
 				if (!player || !player.isHost) {
@@ -144,13 +115,6 @@ export default class Server implements Party.Server {
 					});
 					return;
 				}
-				if (!isEveryoneReady(this.state.players)) {
-					this.send(sender, {
-						type: "error",
-						message: "all players must be ready",
-					});
-					return;
-				}
 				const orderedPlayers = playerIds
 					.map((id) => this.state.players[id] as Player)
 					.sort((a: Player, b: Player) => a.joinedAt - b.joinedAt);
@@ -171,7 +135,6 @@ export default class Server implements Party.Server {
 				}
 				for (const id of Object.keys(this.state.players)) {
 					this.state.players[id].roleKey = undefined;
-					this.state.players[id].ready = false;
 				}
 				this.state.status = "lobby";
 				this.state["assignedAt"] = undefined;
@@ -198,7 +161,6 @@ export default class Server implements Party.Server {
 						id: p.id,
 						name: p.name,
 						isHost: p.isHost,
-						ready: p.ready,
 					}),
 				),
 				roleConfig: this.state.roleConfig,
@@ -265,3 +227,64 @@ export default class Server implements Party.Server {
 }
 
 Server satisfies Party.Worker;
+
+function generateOldTimeyName(): string {
+	const first = [
+		"agnes",
+		"beatrice",
+		"clement",
+		"dorothy",
+		"edmund",
+		"florence",
+		"gilbert",
+		"harriet",
+		"ira",
+		"judith",
+		"katharine",
+		"leopold",
+		"mabel",
+		"nora",
+		"oswald",
+		"pearl",
+		"quincy",
+		"rosalind",
+		"silas",
+		"thelma",
+		"ulysses",
+		"victor",
+		"wilhelmina",
+		"xavier",
+		"yvette",
+		"zeke",
+	];
+	const last = [
+		"abbott",
+		"barnaby",
+		"carrington",
+		"davenport",
+		"ellsworth",
+		"farnsworth",
+		"gafford",
+		"hathaway",
+		"inglewood",
+		"jennings",
+		"kensington",
+		"lancaster",
+		"montgomery",
+		"norwood",
+		"oakley",
+		"pendleton",
+		"quidley",
+		"rosenberg",
+		"sinclair",
+		"thornton",
+		"upton",
+		"vanderbilt",
+		"whitaker",
+		"york",
+		"zabriski",
+	];
+	const f = first[Math.floor(Math.random() * first.length)];
+	const l = last[Math.floor(Math.random() * last.length)];
+	return `${f} ${l}`;
+}

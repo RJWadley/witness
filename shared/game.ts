@@ -19,7 +19,6 @@ export type RoleSpec = {
 export type Player = {
 	id: string; // stable clientId
 	name: string;
-	ready: boolean;
 	isHost: boolean;
 	joinedAt: number;
 	roleKey?: RoleKey;
@@ -124,11 +123,8 @@ const roleKeySchema = z.union([
 export const clientMessageSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("join"),
-		name: z.string().max(64),
 		clientId: z.string().min(1),
 	}),
-	z.object({ type: z.literal("setName"), name: z.string().max(64) }),
-	z.object({ type: z.literal("setReady"), ready: z.boolean() }),
 	z.object({
 		type: z.literal("setRoleCount"),
 		roleKey: roleKeySchema,
@@ -145,12 +141,6 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("error"), message: z.string() }),
 ]);
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
-
-export function isEveryoneReady(players: Record<string, Player>): boolean {
-	const ids = Object.keys(players);
-	if (ids.length === 0) return false;
-	return ids.every((id) => players[id].ready);
-}
 
 export function totalRoles(config: RoleConfig): number {
 	return roleKeys.reduce((sum, key) => sum + (config[key] ?? 0), 0);

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import usePartySocket from "partysocket/react";
 import { useEffect, useMemo, useState } from "react";
 import { styled } from "restyle";
+import QRCode from "qrcode";
 import type { GameState, Player } from "../shared/game";
 import { computeImpactScore, rolesCatalog, roleKeys } from "../shared/game";
 
@@ -25,10 +26,10 @@ function Home() {
 	};
 	return (
 		<Container>
-			<h1>witness</h1>
-			<Button type="button" onClick={createGame}>
+			<HomeTitle>witness</HomeTitle>
+			<HomeButton type="button" onClick={createGame}>
 				create game
-			</Button>
+			</HomeButton>
 		</Container>
 	);
 }
@@ -56,7 +57,6 @@ function Room({ roomId }: { roomId: string }) {
 			send({
 				type: "join",
 				clientId,
-				name: localStorage.getItem("name") || "",
 			});
 		},
 		onMessage(evt) {
@@ -86,7 +86,7 @@ function Room({ roomId }: { roomId: string }) {
 	if (!state)
 		return (
 			<Container>
-				<p>connecting…</p>
+				<ConnectingText>connecting…</ConnectingText>
 			</Container>
 		);
 
@@ -96,34 +96,23 @@ function Room({ roomId }: { roomId: string }) {
 		0,
 	);
 	const canAssign =
-		state.status === "lobby" &&
-		me?.isHost &&
-		totalRoles === playerCount &&
-		Object.values(state.players).every((p) => p.ready);
+		state.status === "lobby" && me?.isHost && totalRoles === playerCount;
 
 	return (
 		<Container>
 			<Header>
 				<h2>room: {roomId}</h2>
-				<Button type="button" onClick={copyLink}>
-					copy link
-				</Button>
+				<HeaderActions>
+					<Button type="button" onClick={copyLink}>
+						copy link
+					</Button>
+					<QRCodeDisplay url={window.location.href} />
+				</HeaderActions>
 			</Header>
 
 			<Columns>
 				<Column>
 					<SectionTitle>players ({playerCount})</SectionTitle>
-					<NameEditor
-						me={me}
-						onChange={(name) => {
-							localStorage.setItem("name", name);
-							send({ type: "setName", name });
-						}}
-					/>
-					<ReadyToggle
-						ready={!!me?.ready}
-						onToggle={(ready) => send({ type: "setReady", ready })}
-					/>
 					<PlayerList players={state.players} meId={clientId} />
 				</Column>
 				<Column>
@@ -149,50 +138,6 @@ function Room({ roomId }: { roomId: string }) {
 	);
 }
 
-function NameEditor({
-	me,
-	onChange,
-}: {
-	me: Player | null;
-	onChange: (name: string) => void;
-}) {
-	const [name, setName] = useState<string>(me?.name ?? "");
-	useEffect(() => setName(me?.name ?? ""), [me?.name]);
-	return (
-		<Row>
-			<input
-				value={name}
-				placeholder="your name"
-				onChange={(e) => setName(e.target.value)}
-			/>
-			<Button type="button" onClick={() => onChange(name)}>
-				save
-			</Button>
-		</Row>
-	);
-}
-
-function ReadyToggle({
-	ready,
-	onToggle,
-}: {
-	ready: boolean;
-	onToggle: (r: boolean) => void;
-}) {
-	return (
-		<Row>
-			<label>
-				<input
-					type="checkbox"
-					checked={ready}
-					onChange={(e) => onToggle(e.target.checked)}
-				/>{" "}
-				ready
-			</label>
-		</Row>
-	);
-}
-
 function PlayerList({
 	players,
 	meId,
@@ -204,11 +149,11 @@ function PlayerList({
 	return (
 		<Card>
 			{list.map((p) => (
-				<div key={p.id}>
-					{p.name || "anon"}
-					{p.id === meId ? " (you)" : ""} {p.isHost ? "[host]" : ""}{" "}
-					{p.ready ? "✅" : "⌛"}
-				</div>
+				<PlayerItem key={p.id}>
+					<PlayerName>{p.name || "anon"}</PlayerName>
+					{p.id === meId && <PlayerBadge>you</PlayerBadge>}
+					{p.isHost && <PlayerBadge variant="host">host</PlayerBadge>}
+				</PlayerItem>
 			))}
 		</Card>
 	);
@@ -235,37 +180,37 @@ function HostPanel({
 		<Card>
 			<SectionTitle>roles</SectionTitle>
 			{roleKeys.map((k) => (
-				<Row key={k}>
-					<div style={{ width: 40 }}>{k}</div>
-					<Button
-						type="button"
-						onClick={() => onChange(k, Math.max(0, (roleConfig[k] ?? 0) - 1))}
-					>
-						-
-					</Button>
-					<div style={{ width: 40, textAlign: "center" }}>
-						{roleConfig[k] ?? 0}
-					</div>
-					<Button
-						type="button"
-						onClick={() => onChange(k, (roleConfig[k] ?? 0) + 1)}
-					>
-						+
-					</Button>
-				</Row>
+				<RoleRow key={k}>
+					<RoleLabel>{k}</RoleLabel>
+					<RoleControls>
+						<RoleButton
+							type="button"
+							onClick={() => onChange(k, Math.max(0, (roleConfig[k] ?? 0) - 1))}
+						>
+							-
+						</RoleButton>
+						<RoleCount>{roleConfig[k] ?? 0}</RoleCount>
+						<RoleButton
+							type="button"
+							onClick={() => onChange(k, (roleConfig[k] ?? 0) + 1)}
+						>
+							+
+						</RoleButton>
+					</RoleControls>
+				</RoleRow>
 			))}
-			<Row>
-				<div>players: {players}</div>
-				<div>total roles: {totalRoles}</div>
-			</Row>
-			<Row>
+			<StatsRow>
+				<StatItem>players: {players}</StatItem>
+				<StatItem>total roles: {totalRoles}</StatItem>
+			</StatsRow>
+			<ActionRow>
 				<Button type="button" disabled={!canAssign} onClick={onAssign}>
 					assign roles
 				</Button>
 				<Button type="button" onClick={onReset}>
 					reset
 				</Button>
-			</Row>
+			</ActionRow>
 		</Card>
 	);
 }
@@ -280,21 +225,55 @@ function AssignedView({ me }: { me: Player | null }) {
 	return (
 		<div>
 			<Card>
-				<h3>your role: {myRole?.name ?? "unassigned"}</h3>
-				<p>{myRole?.description ?? ""}</p>
+				<MyRoleTitle>your role: {myRole?.name ?? "unassigned"}</MyRoleTitle>
+				<MyRoleDescription>{myRole?.description ?? ""}</MyRoleDescription>
 			</Card>
 			<Card>
 				<SectionTitle>all roles</SectionTitle>
 				{sorted.map((r) => (
-					<div key={r.key}>
-						<strong>
+					<RoleItem key={r.key}>
+						<RoleItemName>
 							{r.name} ({r.key})
-						</strong>
-						: {r.description}
-					</div>
+						</RoleItemName>
+						<RoleItemDescription>{r.description}</RoleItemDescription>
+					</RoleItem>
 				))}
 			</Card>
 		</div>
+	);
+}
+
+function QRCodeDisplay({ url }: { url: string }) {
+	const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+	const [showQR, setShowQR] = useState(false);
+
+	useEffect(() => {
+		if (showQR && url) {
+			QRCode.toDataURL(url, {
+				width: 200,
+				margin: 2,
+				color: {
+					dark: "#000000",
+					light: "#FFFFFF",
+				},
+			})
+				.then(setQrDataUrl)
+				.catch(console.error);
+		}
+	}, [url, showQR]);
+
+	return (
+		<QRContainer>
+			<Button type="button" onClick={() => setShowQR(!showQR)}>
+				{showQR ? "hide qr code" : "show qr code"}
+			</Button>
+			{showQR && qrDataUrl && (
+				<QRCodeWrapper>
+					<img src={qrDataUrl} alt="QR Code for room link" />
+					<QRCodeText>scan to join</QRCodeText>
+				</QRCodeWrapper>
+			)}
+		</QRContainer>
 	);
 }
 
@@ -306,6 +285,9 @@ const Container = styled("main", {
 	maxWidth: "960px",
 	margin: "0 auto",
 	padding: "1rem",
+	"@media (max-width: 768px)": {
+		padding: "0.75rem",
+	},
 });
 const Header = styled("div", {
 	display: "flex",
@@ -313,30 +295,334 @@ const Header = styled("div", {
 	alignItems: "center",
 	justifyContent: "space-between",
 	marginBottom: "1rem",
+	"@media (max-width: 768px)": {
+		flexDirection: "column",
+		gap: "0.75rem",
+		alignItems: "stretch",
+	},
+});
+const HeaderActions = styled("div", {
+	display: "flex",
+	gap: "0.75rem",
+	alignItems: "center",
+	"@media (max-width: 768px)": {
+		flexDirection: "column",
+		gap: "0.75rem",
+		width: "100%",
+	},
 });
 const Columns = styled("div", {
 	display: "grid",
 	gridTemplateColumns: "1fr 1fr",
 	gap: "1rem",
+	"@media (max-width: 768px)": {
+		gridTemplateColumns: "1fr",
+		gap: "0.75rem",
+	},
 });
 const Column = styled("div", {});
-const Button = styled("button", {
-	padding: "0.5rem 1rem",
+const Button = styled("button", (_, props) => ({
+	padding: "0.75rem 1.25rem",
 	borderRadius: "8px",
 	border: "1px solid #ddd",
-	cursor: "pointer",
-});
+	cursor: props.disabled ? "not-allowed" : "pointer",
+	fontSize: "1rem",
+	minHeight: "44px", // minimum touch target size
+	opacity: props.disabled ? 0.6 : 1,
+	"@media (max-width: 768px)": {
+		padding: "1rem 1.5rem",
+		fontSize: "1.1rem",
+		minHeight: "48px",
+	},
+}));
 const Card = styled("div", {
 	border: "1px solid #eee",
 	borderRadius: "8px",
-	padding: "0.75rem",
+	padding: "1rem",
+	marginBottom: "1rem",
+	"@media (max-width: 768px)": {
+		padding: "1.25rem",
+		marginBottom: "1.25rem",
+	},
+});
+const SectionTitle = styled("div", {
+	fontWeight: 600,
 	marginBottom: "0.75rem",
+	fontSize: "1.1rem",
+	"@media (max-width: 768px)": {
+		fontSize: "1.2rem",
+		marginBottom: "1rem",
+	},
 });
-const Row = styled("div", {
+const ErrorText = styled("div", {
+	color: "#b00",
+	fontSize: "1rem",
+	"@media (max-width: 768px)": {
+		fontSize: "1.1rem",
+	},
+});
+
+// HostPanel specific styles
+const RoleRow = styled("div", {
 	display: "flex",
-	gap: "0.5rem",
+	justifyContent: "space-between",
 	alignItems: "center",
-	marginBottom: "0.5rem",
+	marginBottom: "1rem",
+	"@media (max-width: 768px)": {
+		flexDirection: "column",
+		gap: "0.75rem",
+		alignItems: "stretch",
+	},
 });
-const SectionTitle = styled("div", { fontWeight: 600, marginBottom: "0.5rem" });
-const ErrorText = styled("div", { color: "#b00" });
+const RoleLabel = styled("div", {
+	fontWeight: 500,
+	fontSize: "1rem",
+	minWidth: "60px",
+	"@media (max-width: 768px)": {
+		fontSize: "1.1rem",
+		textAlign: "center",
+	},
+});
+const RoleControls = styled("div", {
+	display: "flex",
+	alignItems: "center",
+	gap: "0.75rem",
+	"@media (max-width: 768px)": {
+		justifyContent: "center",
+		gap: "1rem",
+	},
+});
+const RoleButton = styled("button", {
+	width: "40px",
+	height: "40px",
+	borderRadius: "50%",
+	border: "1px solid #ddd",
+	backgroundColor: "white",
+	cursor: "pointer",
+	fontSize: "1.2rem",
+	fontWeight: "bold",
+	display: "flex",
+	alignItems: "center",
+	justifyContent: "center",
+	"@media (max-width: 768px)": {
+		width: "48px",
+		height: "48px",
+		fontSize: "1.4rem",
+	},
+	"&:hover": {
+		backgroundColor: "#f5f5f5",
+	},
+	"&:active": {
+		backgroundColor: "#e5e5e5",
+	},
+});
+const RoleCount = styled("div", {
+	width: "50px",
+	textAlign: "center",
+	fontSize: "1.2rem",
+	fontWeight: "600",
+	"@media (max-width: 768px)": {
+		width: "60px",
+		fontSize: "1.4rem",
+	},
+});
+const StatsRow = styled("div", {
+	display: "flex",
+	justifyContent: "space-between",
+	marginBottom: "1rem",
+	padding: "0.75rem",
+	backgroundColor: "#f8f9fa",
+	borderRadius: "6px",
+	"@media (max-width: 768px)": {
+		flexDirection: "column",
+		gap: "0.5rem",
+		textAlign: "center",
+	},
+});
+const StatItem = styled("div", {
+	fontSize: "0.95rem",
+	fontWeight: "500",
+	"@media (max-width: 768px)": {
+		fontSize: "1.05rem",
+	},
+});
+const ActionRow = styled("div", {
+	display: "flex",
+	gap: "0.75rem",
+	"@media (max-width: 768px)": {
+		flexDirection: "column",
+		gap: "0.75rem",
+	},
+});
+
+// PlayerList specific styles
+const PlayerItem = styled("div", {
+	display: "flex",
+	alignItems: "center",
+	gap: "0.75rem",
+	padding: "0.75rem 0",
+	borderBottom: "1px solid #f0f0f0",
+	"&:last-child": {
+		borderBottom: "none",
+	},
+	"@media (max-width: 768px)": {
+		padding: "1rem 0",
+		gap: "1rem",
+	},
+});
+const PlayerName = styled("div", {
+	fontSize: "1rem",
+	fontWeight: "500",
+	flex: 1,
+	"@media (max-width: 768px)": {
+		fontSize: "1.1rem",
+	},
+});
+const PlayerBadge = styled(
+	"div",
+	(styleProps: { variant?: "host" | "default" }) => ({
+		fontSize: "0.8rem",
+		padding: "0.25rem 0.5rem",
+		borderRadius: "12px",
+		fontWeight: "500",
+		backgroundColor: styleProps.variant === "host" ? "#e3f2fd" : "#f3e5f5",
+		color: styleProps.variant === "host" ? "#1976d2" : "#7b1fa2",
+		"@media (max-width: 768px)": {
+			fontSize: "0.9rem",
+			padding: "0.35rem 0.75rem",
+		},
+	}),
+);
+
+// AssignedView specific styles
+const MyRoleTitle = styled("h3", {
+	fontSize: "1.3rem",
+	fontWeight: "600",
+	marginBottom: "0.75rem",
+	color: "#2c3e50",
+	"@media (max-width: 768px)": {
+		fontSize: "1.5rem",
+		marginBottom: "1rem",
+	},
+});
+const MyRoleDescription = styled("p", {
+	fontSize: "1rem",
+	lineHeight: "1.6",
+	color: "#555",
+	"@media (max-width: 768px)": {
+		fontSize: "1.1rem",
+		lineHeight: "1.7",
+	},
+});
+const RoleItem = styled("div", {
+	marginBottom: "1rem",
+	paddingBottom: "0.75rem",
+	borderBottom: "1px solid #f0f0f0",
+	"&:last-child": {
+		borderBottom: "none",
+		marginBottom: 0,
+	},
+	"@media (max-width: 768px)": {
+		marginBottom: "1.25rem",
+		paddingBottom: "1rem",
+	},
+});
+const RoleItemName = styled("div", {
+	fontSize: "1rem",
+	fontWeight: "600",
+	marginBottom: "0.5rem",
+	color: "#2c3e50",
+	"@media (max-width: 768px)": {
+		fontSize: "1.1rem",
+		marginBottom: "0.75rem",
+	},
+});
+const RoleItemDescription = styled("div", {
+	fontSize: "0.95rem",
+	lineHeight: "1.5",
+	color: "#666",
+	"@media (max-width: 768px)": {
+		fontSize: "1.05rem",
+		lineHeight: "1.6",
+	},
+});
+
+// Home page specific styles
+const HomeTitle = styled("h1", {
+	fontSize: "3rem",
+	fontWeight: "700",
+	textAlign: "center",
+	marginBottom: "2rem",
+	color: "#2c3e50",
+	"@media (max-width: 768px)": {
+		fontSize: "2.5rem",
+		marginBottom: "2.5rem",
+	},
+});
+const HomeButton = styled("button", {
+	padding: "1.25rem 2.5rem",
+	borderRadius: "12px",
+	border: "none",
+	backgroundColor: "#3498db",
+	color: "white",
+	cursor: "pointer",
+	fontSize: "1.2rem",
+	fontWeight: "600",
+	minHeight: "56px",
+	width: "100%",
+	maxWidth: "300px",
+	margin: "0 auto",
+	display: "block",
+	"@media (max-width: 768px)": {
+		padding: "1.5rem 3rem",
+		fontSize: "1.3rem",
+		minHeight: "64px",
+		maxWidth: "100%",
+	},
+	"&:hover": {
+		backgroundColor: "#2980b9",
+	},
+	"&:active": {
+		backgroundColor: "#21618c",
+	},
+});
+
+const ConnectingText = styled("p", {
+	fontSize: "1.2rem",
+	textAlign: "center",
+	color: "#666",
+	marginTop: "2rem",
+	"@media (max-width: 768px)": {
+		fontSize: "1.3rem",
+		marginTop: "3rem",
+	},
+});
+
+// QR Code specific styles
+const QRContainer = styled("div", {
+	display: "flex",
+	flexDirection: "column",
+	alignItems: "center",
+	gap: "0.75rem",
+});
+const QRCodeWrapper = styled("div", {
+	display: "flex",
+	flexDirection: "column",
+	alignItems: "center",
+	gap: "0.5rem",
+	padding: "1rem",
+	backgroundColor: "#f8f9fa",
+	borderRadius: "8px",
+	border: "1px solid #eee",
+	"@media (max-width: 768px)": {
+		padding: "1.25rem",
+	},
+});
+const QRCodeText = styled("div", {
+	fontSize: "0.9rem",
+	color: "#666",
+	fontWeight: "500",
+	"@media (max-width: 768px)": {
+		fontSize: "1rem",
+	},
+});
