@@ -1,49 +1,266 @@
 import type * as Party from "partykit/server";
+import {
+	buildDeck,
+	defaultRoleConfig,
+	isEveryoneReady,
+	rolesCatalog,
+	shuffle,
+	totalRoles,
+	clientMessageSchema,
+} from "../shared/game";
+
+import type { Player, GameState, ClientMessage } from "../shared/game";
 
 export default class Server implements Party.Server {
-	count = 0;
+	state: GameState;
+	connections: Set<Party.Connection> = new Set();
+	connectionIdToClientId: Map<string, string> = new Map();
 
-	constructor(readonly room: Party.Room) {}
-
-	onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
-		// A websocket just connected!
-		console.log(
-			`Connected:
-  id: ${conn.id}
-  room: ${this.room.id}
-  url: ${new URL(ctx.request.url).pathname}`,
-		);
-
-		// send the current count to the new client
-		conn.send(this.count.toString());
+	constructor(readonly room: Party.Room) {
+		this.state = {
+			roomId: room.id,
+			hostId: null,
+			status: "lobby",
+			players: {},
+			roleConfig: { ...defaultRoleConfig },
+			rolesCatalog,
+		};
 	}
 
-	onMessage(message: string, sender: Party.Connection) {
-		// let's log the message
-		console.log(`connection ${sender.id} sent message: ${message}`);
-		// we could use a more sophisticated protocol here, such as JSON
-		// in the message data, but for simplicity we just use a string
-		if (message === "increment") {
-			this.increment();
+	onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
+		this.connections.add(conn);
+		console.log(
+			`connected id=${conn.id} room=${this.room.id} url=${new URL(ctx.request.url).pathname}`,
+		);
+		// ask the client to join with their clientId and name
+		this.send(conn, { type: "state", state: this.personalizeStateFor(null) });
+	}
+
+	onClose(conn: Party.Connection) {
+		this.connections.delete(conn);
+		const clientId = this.connectionIdToClientId.get(conn.id);
+		if (clientId) {
+			this.connectionIdToClientId.delete(conn.id);
+			// remove player on disconnect
+			if (this.state.players[clientId]) {
+				delete this.state.players[clientId];
+				// transfer host if needed
+				if (this.state.hostId === clientId) {
+					this.state.hostId = this.findNextHostId();
+					if (this.state.hostId && this.state.players[this.state.hostId]) {
+						this.state.players[this.state.hostId].isHost = true;
+					}
+				}
+				// if we're in lobby and players changed, we may become invalid; that's fine for v1
+				this.broadcastState();
+			}
+		}
+	}
+
+	onMessage(raw: string, sender: Party.Connection) {
+		let msg: ClientMessage | null = null;
+		try {
+			const parsed = JSON.parse(raw);
+			msg = clientMessageSchema.parse(parsed);
+		} catch (err) {
+			console.warn("invalid message", err);
+			this.send(sender, { type: "error", message: "invalid message" });
+			return;
+		}
+
+		switch (msg.type) {
+			case "join": {
+				if (!msg.clientId) {
+					this.send(sender, { type: "error", message: "missing clientId" });
+					return;
+				}
+				this.connectionIdToClientId.set(sender.id, msg.clientId);
+				const now = Date.now();
+				const existing = this.state.players[msg.clientId];
+				if (existing) {
+					// update name if provided
+					if (typeof msg.name === "string") existing.name = msg.name;
+					// keep host/ready/joinedAt/role
+				} else {
+					const isFirst = Object.keys(this.state.players).length === 0;
+					this.state.players[msg.clientId] = {
+						id: msg.clientId,
+						name: typeof msg.name === "string" ? msg.name : "",
+						ready: false,
+						isHost: isFirst,
+						joinedAt: now,
+					};
+					if (isFirst) this.state.hostId = msg.clientId;
+				}
+				this.broadcastState();
+				break;
+			}
+			case "setName": {
+				const player = this.getSenderPlayer(sender);
+				if (!player) return;
+				player.name = msg.name ?? "";
+				this.broadcastState();
+				break;
+			}
+			case "setReady": {
+				const player = this.getSenderPlayer(sender);
+				if (!player) return;
+				player.ready = !!msg.ready;
+				this.broadcastState();
+				break;
+			}
+			case "setRoleCount": {
+				const player = this.getSenderPlayer(sender);
+				if (!player || !player.isHost) {
+					this.send(sender, {
+						type: "error",
+						message: "only host can edit roles",
+					});
+					return;
+				}
+				if (!msg.roleKey || typeof msg.count !== "number") return;
+				this.state.roleConfig[msg.roleKey] = Math.max(
+					0,
+					Math.min(99, msg.count),
+				);
+				this.broadcastState();
+				break;
+			}
+			case "assignRoles": {
+				const player = this.getSenderPlayer(sender);
+				if (!player || !player.isHost) {
+					this.send(sender, {
+						type: "error",
+						message: "only host can assign roles",
+					});
+					return;
+				}
+				const playerIds = Object.keys(this.state.players);
+				const deck = buildDeck(this.state.roleConfig);
+				if (deck.length !== playerIds.length) {
+					this.send(sender, {
+						type: "error",
+						message: "role count must equal number of players",
+					});
+					return;
+				}
+				if (!isEveryoneReady(this.state.players)) {
+					this.send(sender, {
+						type: "error",
+						message: "all players must be ready",
+					});
+					return;
+				}
+				const orderedPlayers = playerIds
+					.map((id) => this.state.players[id] as Player)
+					.sort((a: Player, b: Player) => a.joinedAt - b.joinedAt);
+				const shuffled = shuffle(deck);
+				for (let i = 0; i < orderedPlayers.length; i++) {
+					orderedPlayers[i].roleKey = shuffled[i];
+				}
+				this.state.status = "assigned";
+				this.state["assignedAt"] = Date.now();
+				this.broadcastState();
+				break;
+			}
+			case "reset": {
+				const player = this.getSenderPlayer(sender);
+				if (!player || !player.isHost) {
+					this.send(sender, { type: "error", message: "only host can reset" });
+					return;
+				}
+				for (const id of Object.keys(this.state.players)) {
+					this.state.players[id].roleKey = undefined;
+					this.state.players[id].ready = false;
+				}
+				this.state.status = "lobby";
+				this.state["assignedAt"] = undefined;
+				this.broadcastState();
+				break;
+			}
+			case "requestState": {
+				this.sendStateTo(sender);
+				break;
+			}
+			default:
+				this.send(sender, { type: "error", message: "unknown message type" });
 		}
 	}
 
 	onRequest(req: Party.Request) {
-		// response to any HTTP request (any method, any path) with the current
-		// count. This allows us to use SSR to give components an initial value
-
-		// if the request is a POST, increment the count
-		if (req.method === "POST") {
-			this.increment();
+		// return a summary state for debugging; not used by client in v1
+		if (req.method === "GET") {
+			const summary = {
+				roomId: this.state.roomId,
+				status: this.state.status,
+				players: (Object.values(this.state.players) as Player[]).map(
+					(p: Player) => ({
+						id: p.id,
+						name: p.name,
+						isHost: p.isHost,
+						ready: p.ready,
+					}),
+				),
+				roleConfig: this.state.roleConfig,
+				totalRoles: totalRoles(this.state.roleConfig),
+			};
+			return Response.json(summary);
 		}
-
-		return new Response(this.count.toString());
+		return new Response("method not allowed", { status: 405 });
 	}
 
-	increment() {
-		this.count = (this.count + 1) % 100;
-		// broadcast the new count to all clients
-		this.room.broadcast(this.count.toString(), []);
+	// ----- helpers -----
+	getSenderPlayer(conn: Party.Connection): Player | undefined {
+		const clientId = this.connectionIdToClientId.get(conn.id);
+		if (!clientId) {
+			this.send(conn, { type: "error", message: "please join first" });
+			return undefined;
+		}
+		return this.state.players[clientId];
+	}
+
+	findNextHostId(): string | null {
+		const remaining = Object.values(this.state.players);
+		if (remaining.length === 0) return null;
+		remaining.sort((a, b) => a.joinedAt - b.joinedAt);
+		return remaining[0].id;
+	}
+
+	personalizeStateFor(viewerClientId: string | null): GameState {
+		// deep clone shallowly and redact others' roleKey
+		const players: GameState["players"] = {};
+		for (const [id, p] of Object.entries(this.state.players)) {
+			players[id] = { ...p };
+			if (!viewerClientId || id !== viewerClientId) {
+				players[id].roleKey = undefined;
+			}
+		}
+		return {
+			...this.state,
+			players,
+		};
+	}
+
+	sendStateTo(conn: Party.Connection) {
+		const clientId = this.connectionIdToClientId.get(conn.id) ?? null;
+		this.send(conn, {
+			type: "state",
+			state: this.personalizeStateFor(clientId),
+		});
+	}
+
+	broadcastState() {
+		for (const conn of this.connections) {
+			this.sendStateTo(conn);
+		}
+	}
+
+	send(conn: Party.Connection, data: unknown) {
+		try {
+			conn.send(JSON.stringify(data));
+		} catch (e) {
+			console.warn("failed to send", e);
+		}
 	}
 }
 
