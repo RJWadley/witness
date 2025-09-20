@@ -1,14 +1,13 @@
 import type * as Party from "partykit/server";
+import type { ClientMessage, GameState, Player } from "../shared/game";
 import {
 	buildDeck,
+	clientMessageSchema,
 	defaultRoleConfig,
 	rolesCatalog,
 	shuffle,
 	totalRoles,
-	clientMessageSchema,
 } from "../shared/game";
-
-import type { Player, GameState, ClientMessage } from "../shared/game";
 
 export default class Server implements Party.Server {
 	state: GameState;
@@ -123,7 +122,7 @@ export default class Server implements Party.Server {
 					orderedPlayers[i].roleKey = shuffled[i];
 				}
 				this.state.status = "assigned";
-				this.state["assignedAt"] = Date.now();
+				this.state.assignedAt = Date.now();
 				this.broadcastState();
 				break;
 			}
@@ -137,7 +136,7 @@ export default class Server implements Party.Server {
 					this.state.players[id].roleKey = undefined;
 				}
 				this.state.status = "lobby";
-				this.state["assignedAt"] = undefined;
+				this.state.assignedAt = undefined;
 				this.broadcastState();
 				break;
 			}
