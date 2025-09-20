@@ -65,6 +65,7 @@ export default class Server implements Party.Server {
 				const existing = this.state.players[msg.clientId];
 				if (existing) {
 					// preserve existing player record (server-owned name)
+					if (existing.isHost) existing.isReady = true; // host is always ready
 				} else {
 					const isFirst = Object.keys(this.state.players).length === 0;
 					this.state.players[msg.clientId] = {
@@ -72,8 +73,28 @@ export default class Server implements Party.Server {
 						name: generateOldTimeyName(),
 						isHost: isFirst,
 						joinedAt: now,
+						isReady: isFirst ? true : false,
 					};
 					if (isFirst) this.state.hostId = msg.clientId;
+				}
+				this.broadcastState();
+				break;
+			}
+			case "setReady": {
+				const player = this.getSenderPlayer(sender);
+				if (!player) return;
+				if (this.state.status !== "lobby") {
+					this.send(sender, {
+						type: "error",
+						message: "cannot ready after start",
+					});
+					return;
+				}
+				if (player.isHost) {
+					player.isReady = true; // host is always ready
+				} else {
+					player.isReady = !!(msg as ClientMessage & { type: "setReady" })
+						.ready;
 				}
 				this.broadcastState();
 				break;
@@ -105,18 +126,20 @@ export default class Server implements Party.Server {
 					});
 					return;
 				}
-				const playerIds = Object.keys(this.state.players);
+				const readyPlayers = Object.values(this.state.players).filter(
+					(p) => p.isReady,
+				);
 				const deck = buildDeck(this.state.roleConfig);
-				if (deck.length !== playerIds.length) {
+				if (deck.length !== readyPlayers.length) {
 					this.send(sender, {
 						type: "error",
-						message: "role count must equal number of players",
+						message: "role count must equal number of ready players",
 					});
 					return;
 				}
-				const orderedPlayers = playerIds
-					.map((id) => this.state.players[id] as Player)
-					.sort((a: Player, b: Player) => a.joinedAt - b.joinedAt);
+				const orderedPlayers = readyPlayers.sort(
+					(a: Player, b: Player) => a.joinedAt - b.joinedAt,
+				);
 				const shuffled = shuffle(deck);
 				for (let i = 0; i < orderedPlayers.length; i++) {
 					orderedPlayers[i].roleKey = shuffled[i];
@@ -134,6 +157,10 @@ export default class Server implements Party.Server {
 				}
 				for (const id of Object.keys(this.state.players)) {
 					this.state.players[id].roleKey = undefined;
+					this.state.players[id].isReady = false;
+				}
+				if (this.state.hostId && this.state.players[this.state.hostId]) {
+					this.state.players[this.state.hostId].isReady = true; // host remains ready after reset
 				}
 				this.state.status = "lobby";
 				this.state.assignedAt = undefined;

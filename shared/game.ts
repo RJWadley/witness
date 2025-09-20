@@ -21,6 +21,7 @@ export type Player = {
 	name: string;
 	isHost: boolean;
 	joinedAt: number;
+	isReady?: boolean;
 	roleKey?: RoleKey;
 };
 
@@ -124,6 +125,10 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("join"),
 		clientId: z.string().min(1),
+	}),
+	z.object({
+		type: z.literal("setReady"),
+		ready: z.boolean(),
 	}),
 	z.object({
 		type: z.literal("setRoleCount"),
