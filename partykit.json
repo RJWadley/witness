@@ -1,10 +1,10 @@
 {
-  "$schema": "https://www.partykit.io/schema.json",
-  "name": "witness",
-  "main": "party/server.ts",
-  "compatibilityDate": "2025-09-20",
-  "serve": {
-    "path": "public",
-    "build": "app/client.tsx"
-  }
+	"$schema": "https://www.partykit.io/schema.json",
+	"name": "witness",
+	"main": "party/server.ts",
+	"compatibilityDate": "2025-09-20",
+	"serve": {
+		"path": "public",
+		"build": "app/client.tsx"
+	}
 }
